@@ -1,121 +1,241 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const CutVideoApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+/// Telegram's upload limit is 2000 MiB.
+const int telegramLimitBytes = 2000 * 1024 * 1024;
 
-  // This widget is the root of your application.
+/// How many parts a file of [bytes] must be split into to stay under the limit.
+int partsFor(int bytes, {int limit = telegramLimitBytes}) {
+  return max(1, (bytes / limit).ceil());
+}
+
+/// Human-readable size, using the same decimal GB iOS shows in Settings.
+String formatGb(int bytes) => '${(bytes / 1000000000).toStringAsFixed(2)} GB';
+
+class CutVideoApp extends StatelessWidget {
+  const CutVideoApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Cut Video',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2AABEE)),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const SplitPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class SplitPage extends StatefulWidget {
+  const SplitPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<SplitPage> createState() => _SplitPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+enum _Status { idle, picked, working, done, error }
 
-  void _incrementCounter() {
+class _SplitPageState extends State<SplitPage> {
+  static const _channel = MethodChannel('cut_video/splitter');
+
+  final _picker = ImagePicker();
+
+  _Status _status = _Status.idle;
+  XFile? _video;
+  int _sizeBytes = 0;
+  int _parts = 0;
+  int _savedParts = 0;
+  String _message = '';
+
+  Future<void> _pickVideo() async {
+    final file = await _picker.pickVideo(source: ImageSource.gallery);
+    if (file == null) return;
+
+    final size = await file.length();
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _video = file;
+      _sizeBytes = size;
+      _parts = partsFor(size);
+      _status = _Status.picked;
+    });
+  }
+
+  Future<void> _split() async {
+    final video = _video;
+    if (video == null) return;
+
+    setState(() => _status = _Status.working);
+    try {
+      final saved = await _channel.invokeMethod<int>(
+        'splitAndSave',
+        {'path': video.path, 'parts': _parts},
+      );
+      setState(() {
+        _savedParts = saved ?? _parts;
+        _status = _Status.done;
+      });
+    } on PlatformException catch (e) {
+      setState(() {
+        _message = e.message ?? 'Something went wrong.';
+        _status = _Status.error;
+      });
+    }
+  }
+
+  void _reset() {
+    setState(() {
+      _video = null;
+      _status = _Status.idle;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            children: [
+              const Spacer(),
+              _buildCenter(scheme, textTheme),
+              const Spacer(),
+              _buildAction(),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+
+  Widget _buildCenter(ColorScheme scheme, TextTheme textTheme) {
+    switch (_status) {
+      case _Status.idle:
+        return Column(
+          children: [
+            Icon(Icons.movie_outlined, size: 72, color: scheme.primary),
+            const SizedBox(height: 24),
+            Text('Split for Telegram', style: textTheme.headlineMedium),
+            const SizedBox(height: 8),
+            Text(
+              'Pick a video. It is split into parts under 2 GB and saved to your gallery.',
+              textAlign: TextAlign.center,
+              style: textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        );
+
+      case _Status.picked:
+        return Column(
+          children: [
+            Text(formatGb(_sizeBytes), style: textTheme.displayMedium),
+            const SizedBox(height: 8),
+            Text(
+              _parts == 1
+                  ? 'Already under 2 GB, no split needed.'
+                  : 'Will be split into $_parts parts',
+              textAlign: TextAlign.center,
+              style: textTheme.titleMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        );
+
+      case _Status.working:
+        return Column(
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 24),
+            Text('Splitting into $_parts parts…', style: textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              'Keep the app open until it finishes.',
+              style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        );
+
+      case _Status.done:
+        return Column(
+          children: [
+            Icon(Icons.check_circle_outline, size: 72, color: scheme.primary),
+            const SizedBox(height: 24),
+            Text('Done', style: textTheme.headlineMedium),
+            const SizedBox(height: 8),
+            Text(
+              '$_savedParts parts saved to your gallery.',
+              textAlign: TextAlign.center,
+              style: textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        );
+
+      case _Status.error:
+        return Column(
+          children: [
+            Icon(Icons.error_outline, size: 72, color: scheme.error),
+            const SizedBox(height: 24),
+            Text('Something went wrong', style: textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            Text(
+              _message,
+              textAlign: TextAlign.center,
+              style: textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        );
+    }
+  }
+
+  Widget _buildAction() {
+    switch (_status) {
+      case _Status.idle:
+        return _wideButton(label: 'Choose video', onPressed: _pickVideo);
+
+      case _Status.picked:
+        return Column(
+          children: [
+            _wideButton(
+              label: _parts == 1 ? 'Save copy to gallery' : 'Split & save',
+              onPressed: _split,
+            ),
+            const SizedBox(height: 8),
+            TextButton(onPressed: _pickVideo, child: const Text('Choose another')),
+          ],
+        );
+
+      case _Status.working:
+        return const SizedBox(height: 56);
+
+      case _Status.done:
+      case _Status.error:
+        return _wideButton(label: 'Start over', onPressed: _reset);
+    }
+  }
+
+  Widget _wideButton({required String label, required VoidCallback onPressed}) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: FilledButton(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        child: Text(label, style: const TextStyle(fontSize: 17)),
       ),
     );
   }

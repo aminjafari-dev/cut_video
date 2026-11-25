@@ -6,6 +6,10 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saves the split video parts to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Lets you choose a video to split.</string>
 	<key>CFBundleDisplayName</key>
 	<string>Cut Video</string>
 	<key>CFBundleExecutable</key>
